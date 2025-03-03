@@ -1,78 +1,49 @@
-require("dotenv").config();
-const express = require("express");
-const multer = require("multer");
-const fs = require("fs");
-const path = require("path");
-const { whisper } = require("whisper-node");
-const cors = require("cors");
+const express = require('express');
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
 
 const app = express();
-const port = process.env.PORT || 4000;
-const modelPath =
-  process.env.MODEL_PATH || "/app/whisper.cpp/models/ggml-tiny.bin";
-app.use(cors());
-// Setup upload folder
-const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+const port = 4000;
 
-// Setup transcripts folder
-const transcriptDir = path.join(__dirname, "transcripts");
-if (!fs.existsSync(transcriptDir)) fs.mkdirSync(transcriptDir);
+// Multer setup for file uploads
+const upload = multer({ dest: 'uploads/' });
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
-});
-const upload = multer({ storage });
+// Transcribe endpoint
+app.post('/transcribe', upload.single('audio'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+  console.log("trancribing");
+  const whisperCliPath = path.resolve(__dirname, 'whisper.cpp/build/bin/whisper-cli');
+  const modelPath = path.resolve(__dirname, 'models/ggml-tiny.en.bin');
+  const audioFilePath = path.resolve(__dirname, req.file.path);
 
-// Endpoint to get audio file and respond with transcript text file
-app.post("/transcribe", upload.single("audio"), async (req, res) => {
-  const filePath = req.file?.path;
+  const whisperProcess = spawn(whisperCliPath, ['-m', modelPath, '-f', audioFilePath]);
 
-  try {
-    if (!req.file) return res.status(400).send("No file uploaded.");
+  let transcription = '';
 
-    console.log("Using model path:", modelPath);
+  whisperProcess.stdout.on('data', (data) => {
+    transcription += data.toString();
+  });
 
-    const transcript = await whisper(filePath, {
-      modelPath: modelPath,
-      whisperOptions: {
-        language: "en",
-      },
+  whisperProcess.on('close', (code) => {
+    fs.unlink(audioFilePath, (err) => {
+      if (err) {
+        console.error('Failed to delete file:', err);
+      }
     });
 
-    if (!transcript || !Array.isArray(transcript)) {
-      throw new Error("Transcription failed - invalid response");
+    if (code === 0) {
+      const cleanedTranscription = transcription.replace(/\[.*?\]/g, '').replace(/\n/g, ' ').trim();
+      res.json({ transcription: cleanedTranscription });
+    } else {
+      res.status(500).json({ error: 'Transcription failed' });
     }
-
-    const transcriptStr = transcript.map((item) => item.speech).join(" ");
-
-    // Send response first
-    res.json({ transcription: transcriptStr });
-
-    // Then delete the file
-    try {
-      await fs.promises.unlink(filePath);
-      console.log(`Successfully deleted: ${filePath}`);
-    } catch (deleteError) {
-      console.error(`Failed to delete audio file ${filePath}:`, deleteError);
-    }
-  } catch (error) {
-    // If there's an error, try to clean up the file before sending error response
-    if (filePath) {
-      try {
-        await fs.promises.unlink(filePath);
-        console.log(`Cleaned up file after error: ${filePath}`);
-      } catch (deleteError) {
-        console.error("Failed to delete file after error:", deleteError);
-      }
-    }
-
-    console.error("Transcription error:", error);
-    res.status(500).json({ error: error.message || "Transcription failed." });
-  }
+  });
 });
 
 app.listen(port, () => {
-  console.log(`The server is running at:${port}`);
+  console.log(`Server running at http://localhost:${port}`);
 });

@@ -1,34 +1,34 @@
-FROM node:18
+FROM node:18-alpine
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    make \
-    g++ \
-    cmake \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set up Node.js application
+# Set the working directory
 WORKDIR /app
 
-# Copy package files and install dependencies
+# Copy package.json and package-lock.json
 COPY package*.json ./
+
+# Install dependencies
 RUN npm install
 
-# Clone and build whisper.cpp in the app directory
-RUN git clone https://github.com/ggerganov/whisper.cpp.git && \
-    cd whisper.cpp && \
-    cmake . && \
-    make && \
-    bash ./models/download-ggml-model.sh tiny
-
-# Copy the rest of the application code
+# Copy the rest of the app's source code
 COPY . .
 
-# Set environment variables for whisper.cpp paths
-
-# Expose the application port
+# Expose the port the app runs on
 EXPOSE 4000
 
-# Start the application
+# Install Whisper.cpp dependencies
+RUN apk add --no-cache git build-base cmake ffmpeg curl
+
+# Clone and build Whisper.cpp
+RUN git clone https://github.com/ggerganov/whisper.cpp.git && \
+    cd whisper.cpp && \
+    mkdir -p build && cd build && \
+    cmake .. && make
+
+# Ensure the models directory exists
+RUN mkdir -p models
+
+# Download the tiny model
+RUN curl -L -o models/ggml-tiny.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+
+# Command to run the app
 CMD ["node", "server.js"]
